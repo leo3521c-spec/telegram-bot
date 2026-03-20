@@ -35,12 +35,53 @@ def ordinal(n):
     else:
         return f"{n}{['th','st','nd','rd','th','th','th','th','th','th'][n%10]}"
 
+# ---------------- REAL-TIME LIMIT CHECK ----------------
+async def check_active_breaks(context: ContextTypes.DEFAULT_TYPE):
+    now = datetime.now()
+    for user, u in user_data.items():
+        active = u["Away"]
+        if not active:
+            continue
+        act = active["action"]
+        start_time = active["time"]
+        elapsed = (now - start_time).total_seconds()
+
+        # Smoke max 5 minutes
+        if act == "Smoke" and elapsed > 5*60:
+            await context.bot.send_message(
+                chat_id=u["chat_id"],
+                text=(
+                    "🚨 <b>Smoke Break Time Exceeded</b>\n\n"
+                    f"⌚ You have been on <b>Smoke</b> break for more than 5 minutes!\n"
+                    "⏳ Please return to seat immediately.\n"
+                    "💰 <b>Late return will result in $100 fine</b>"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+        # Toilet max 10 minutes
+        if act == "Toilet" and elapsed > 10*60:
+            await context.bot.send_message(
+                chat_id=u["chat_id"],
+                text=(
+                    "🚨 <b>Toilet Break Time Exceeded</b>\n\n"
+                    f"⌚ You have been on <b>Toilet</b> break for more than 10 minutes!\n"
+                    "⏳ Please return to seat immediately.\n"
+                    "💰 <b>Late return will result in $100 fine</b>"
+                ),
+                parse_mode=ParseMode.HTML
+            )
 # ---------------- COMMANDS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
     if user not in user_data:
         user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None}
-    msg = "✅ <b>Welcome!</b> Buttons are ready."
+
+    msg = (
+        "✨ <b>Welcome to Work Tracker Bot</b>\n\n"
+        "📌 <b>Status:</b> Ready to track your activity\n"
+        "📱 Use the buttons below to control your workflow\n\n"
+        "🚀 <b>Let’s get productive!</b>"
+    )
     await update.message.reply_text(msg, reply_markup=markup, parse_mode=ParseMode.HTML)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,28 +91,85 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_data[user][key] = None
             else:
                 user_data[user][key] = []
-    await update.message.reply_text("🔄 <b>Manual Reset Done</b>. All user data cleared.")
+
+    await update.message.reply_text(
+        "🔄 <b>System Reset Successful</b>\n\n"
+        "🗑 All user activity data has been cleared\n"
+        "⚙️ Fresh tracking session is ready",
+        parse_mode=ParseMode.HTML
+    )
 
 # ---------------- BUTTON HANDLER ----------------
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user.first_name
     action = update.message.text
     now = datetime.now()
-
+        
     if user not in user_data:
         user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None}
     u = user_data[user]
 
-    # ---------- VALIDATION FOR ACTIVE BREAK ----------
     active_break = u["Away"]
+
+    # ---------- PREVENT ACTION BEFORE START WORK ----------
+    if action in ["Smoke","Toilet","Eat","Off Work"] and not u["Start Work"]:
+        await update.message.reply_text(
+            "⚠️ <b>Action Not Allowed!</b>\n"
+            "🚫 You cannot click <b>Smoke, Toilet, Eat</b> or <b>Off Work</b> before starting your work.\n"
+            "🟢 Please click <b>Start Work</b> to officially begin your workday and enable other buttons.\n"
+            "📝 Follow the workflow: Start Work → Breaks → Back to Seat → Off Work.\n"
+            "💡 <b>অবশ্যই প্রথমে Start Work ক্লিক করুন। অন্য বাটনগুলো সক্রিয় হবে তার পরেই।</b>\n"
+            "📌 প্রফেশনাল নির্দেশনা অনুযায়ী কার্যক্রম অনুসরণ করুন।",
+            parse_mode=ParseMode.HTML
+        )
+        return
+        
+    # ---------- DAILY LIMIT CHECK ----------
+    if action == "Smoke" and len(u["Smoke"]) >= 5:
+        await update.message.reply_text(
+            "🚫 <b>Daily Smoke Limit Exceeded</b>\n"
+            "💰 You cannot take more than 5 Smoke breaks per day\n"
+            "<b>Violation may result in $100 fine</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    if action == "Toilet" and len(u["Toilet"]) >= 5:
+        await update.message.reply_text(
+            "🚫 <b>Daily Toilet Limit Exceeded</b>\n"
+            "💰 You cannot take more than 5 Toilet breaks per day\n"
+            "<b>Violation may result in $100 fine</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    if action == "Eat" and len(u["Eat"]) >= 1:
+        await update.message.reply_text(
+            "🚫 <b>Daily Eat Limit Exceeded</b>\n"
+            "💰 You cannot take more than 1 Eat break per day\n"
+            "<b>Violation may result in $100 fine</b>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+        
+    # ---------- VALIDATION ----------
     if action in ["Smoke","Toilet","Eat"]:
         if not u["Start Work"]:
-            await update.message.reply_text("⚠️ <b>Work Not Started</b>\nClick Start Work first.", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(
+                "⚠️ <b>Work Not Started</b>\n"
+                "👉 Please click <b>Start Work</b> before taking a break",
+                parse_mode=ParseMode.HTML)
             return
+
         if active_break:
             await update.message.reply_text(
-                f"⚠️ <b>Break Already Active</b>\nYou are currently on {active_break['action']} break.\n"
-                "Please click on Back to Seat before starting a new activity.",
+                f"🚫 <b>BREAK ALREADY ACTIVE</b>\n\n"
+                f"🕒 You are currently on <b>{active_break['action']}</b> break\n\n"
+                "⚠️ <b>Action Required:</b>\n"
+                "👉 You must click <b>Back to Seat</b> before starting any new activity\n\n"
+                "💰 <b>Warning:</b> If you delay returning and do not click Back to Seat on time,\n"
+                "a <b>$50 fine</b> may be applied\n\n"
+                "🚨 <i>Please follow the process strictly to avoid penalties</i>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -80,24 +178,34 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action=="Back to Seat":
         if not active_break:
             await update.message.reply_text(
-                "⚠️ <b>No Active Break</b>\nYou are not on a break yet. Click Smoke/Toilet/Eat first.",
-                parse_mode=ParseMode.HTML
-            )
+                "⚠️ <b>NO ACTIVE BREAK DETECTED</b>\n\n"
+                "🚫 You are not currently on any break\n\n"
+                "👉 Please start a valid activity first:\n"
+                "<b>Smoke / Eat / Toilet</b>\n\n"
+                "💡 After completing your break, always click <b>Back to Seat</b>\n"
+                "💰 Late response may result in a <b>$50 fine</b>",
+                parse_mode=ParseMode.HTML)
             return
+
         away_action = active_break["action"]
         start_time = active_break["time"]
         duration = now - start_time
+
         u["Back to Seat"].append({"action": away_action, "time": now, "duration": duration})
         u[away_action].append(duration)
         u["Away"] = None
+
         total_duration = sum(u[away_action], timedelta())
         total_count = len(u[away_action])
+
         msg = (
-            f"🪑 <b>Back to Seat</b> from {away_action}\n"
-            f"⌚ Back to seat time: {time_str(now)}\n"
-            f"⏱ Total {away_action} time now: {format_duration(duration)}\n"
-            f"⏱ Total {away_action} Time today: {format_duration(total_duration)} | Total {away_action}: {total_count}\n\n"
-            "⚠️ Please do not click on Off Work if you are still in work."
+            "🪑 <b>Back to Seat Recorded</b>\n\n"
+            f"📌 <b>Break Type:</b> {away_action}\n"
+            f"⌚ <b>Return Time:</b> {time_str(now)}\n\n"
+            f"⏱ <b>Session Duration:</b> {format_duration(duration)}\n"
+            f"📊 <b>Total Today:</b> {format_duration(total_duration)}\n"
+            f"🔢 <b>Total Count:</b> {total_count}\n\n"
+            "⚠️ <i>Do not click Off Work if you are still working</i>"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
@@ -106,20 +214,21 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action=="Start Work":
         if u["Start Work"] and not u["Off Work"]:
             await update.message.reply_text(
-                "⚠️ <b>You have already started your work today!</b>\n"
-                "You did not click on Off Work yet.\n"
-                "If you completed your work please click on Off Work.\n"
-                "Then click Start Work again for further work.",
+                "⚠️ <b>Work Already Started</b>\n\n"
+                "📌 You haven't ended your previous session\n"
+                "👉 Click <b>Off Work</b> before starting again",
                 parse_mode=ParseMode.HTML
             )
             return
+
         u["Start Work"].append(now)
         count = ordinal(len(u["Start Work"]))
+
         msg = (
-            f"🟢 <b>Work Started</b>\n"
-            f"⌚ Starting time: {time_str(now)}\n"
-            f"📊 Total count: {count}\n"
-            "💡 Please do not click on Off Work if you are still doing work."
+            "🟢 <b>Work Session Started</b>\n\n"
+            f"⌚ <b>Start Time:</b> {time_str(now)}\n"
+            f"📊 <b>Session Count:</b> {count}\n\n"
+            "💼 Stay focused and productive!"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
@@ -127,27 +236,35 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------- OFF WORK ----------
     if action=="Off Work":
         if not u["Start Work"]:
-            await update.message.reply_text("⚠️ <b>Work Not Started</b>\nClick Start Work first.", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(
+                "⚠️ <b>No Active Work Session</b>\n"
+                "👉 Click <b>Start Work</b> first",
+                parse_mode=ParseMode.HTML)
             return
+
         u["Off Work"] = now
+
         summary=""
-        total_working = timedelta()
         total_away_time = timedelta()
+
         for act in ["Smoke","Toilet","Eat"]:
             count = len(u[act])
             duration = sum(u[act], timedelta())
             total_away_time += duration
-            summary+=f"- {act} count: {count}, total duration: {format_duration(duration)}\n"
+            summary+=f"• <b>{act}</b> → Count: {count}, Time: {format_duration(duration)}\n"
+
         start_times = ', '.join([time_str(t) for t in u["Start Work"]])
-        summary=f"- Start Work times: {start_times}\n"+summary
         total_working = (now - u["Start Work"][0]) - total_away_time
+
         msg = (
-            "📊 <b>Off Work summary</b>\n\n"
-            "You have completed your work today\n\n"
-            f"{summary}"
-            f"Total Working Hours (excluding Smoke/Toilet/Eat): {format_duration(total_working)}\n\n"
-            "💡 When you will start work again please click on Start Work."
+            "📊 <b>Work Summary Report</b>\n\n"
+            "✅ <b>Status:</b> Work Completed\n\n"
+            f"🕒 <b>Start Times:</b> {start_times}\n\n"
+            f"{summary}\n"
+            f"⏱ <b>Net Working Time:</b> {format_duration(total_working)}\n\n"
+            "🚀 <i>Click Start Work to begin a new session</i>"
         )
+
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
 
@@ -156,12 +273,17 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u["Away"] = {"action": action, "time": now}
         today_count = len(u[action])
         start_work_time = time_str(u["Start Work"][0])
+
         msg = (
-            f"🍽 <b>Eat Started</b>\n"
-            f"⌚ Starting Time: {time_str(now)}\n"
-            f"📊 Total Eat today: {today_count}\n"
-            f"⌛ Start work time: {start_work_time}\n\n"
-            "⚠️ Please click on Back to Seat when you get back from Eat. Failure to click on time will impose $50 fine."
+            "🍽 <b>Break Started: Eat</b>\n\n"
+            f"⌚ <b>Start Time:</b> {time_str(now)}\n"
+            f"📊 <b>Today's Count:</b> {today_count}\n"
+            f"🕒 <b>Work Start:</b> {start_work_time}\n\n"
+            "⚠️ <b>Important Notice:</b>\n"
+            "👉 You must click <b>Back to Seat</b> immediately after returning\n"
+            "⏳ Any delay in response will be strictly monitored\n"
+            "💰 <b>Penalty:</b> Late Back to Seat action will result in a <b>$50 fine</b>\n"
+            "🚨 <i>Please ensure compliance</i>"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
@@ -169,12 +291,16 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action=="Toilet":
         u["Away"] = {"action": action, "time": now}
         today_count = len(u[action])
+
         msg = (
-            f"🚻 <b>Toilet Started</b>\n"
-            f"⌚ Starting time: {time_str(now)}\n"
-            f"📊 Total Toilet count today: {today_count}\n"
-            f"⏱ Total toilet time use today: \n\n"
-            "⚠️ Please click on Back to Seat when you are back from Toilet to avoid $50 fine. Thank you."
+            "🚻 <b>Break Started: Toilet</b>\n\n"
+            f"⌚ <b>Start Time:</b> {time_str(now)}\n"
+            f"📊 <b>Today's Count:</b> {today_count}\n\n"
+            "⚠️ <b>Mandatory Action:</b>\n"
+            "👉 Click <b>Back to Seat</b> immediately after returning\n"
+            "⏳ Delay will be considered a violation\n"
+            "💰 <b>$50 fine</b> will be applied for late action\n"
+            "🚨 <i>Strict monitoring in place</i>"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
@@ -182,12 +308,16 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action=="Smoke":
         u["Away"] = {"action": action, "time": now}
         today_count = len(u[action])
+
         msg = (
-            f"🚬 <b>Smoke Started</b>\n"
-            f"⌚ Starting time: {time_str(now)}\n"
-            f"📊 Total Smoke count today: {today_count}\n"
-            f"⏱ Total smoke time use today: \n\n"
-            "⚠️ Please click on Back to Seat when you are back from Smoke to avoid $50 fine. Thank you."
+            "🚬 <b>Break Started: Smoke</b>\n\n"
+            f"⌚ <b>Start Time:</b> {time_str(now)}\n"
+            f"📊 <b>Today's Count:</b> {today_count}\n\n"
+            "⚠️ <b>Important Instruction:</b>\n"
+            "👉 You must click <b>Back to Seat</b> as soon as you return\n"
+            "⏳ Any delay will be tracked\n"
+            "💰 Late update will result in a <b>$50 fine</b>\n"
+            "🚨 <i>Avoid penalties by responding on time</i>"
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
