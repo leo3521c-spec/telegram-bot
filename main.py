@@ -3,6 +3,9 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from datetime import datetime, timedelta
 import os
+from zoneinfo import ZoneInfo
+
+BANGLADESH_TZ = ZoneInfo('Asia/Dhaka')
 
 # ---------------- CONFIG ----------------
 TOKEN = os.environ.get("TOKEN")  # Replit Secret
@@ -27,7 +30,7 @@ def format_duration(td: timedelta):
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 def time_str(dt: datetime):
-    return dt.strftime("%I:%M:%S %p")
+    return dt.astimezone(BANGLADESH_TZ).strftime('%I:%M:%S %p')
 
 def ordinal(n):
     if 10 <= n % 100 <= 20:
@@ -37,44 +40,48 @@ def ordinal(n):
 
 # ---------------- REAL-TIME LIMIT CHECK ----------------
 async def check_active_breaks(context: ContextTypes.DEFAULT_TYPE):
-    now = datetime.now()
+    now = datetime.now(BANGLADESH_TZ)
+
     for user, u in user_data.items():
-        active = u["Away"]
+        active = u.get("Away")
         if not active:
             continue
-        act = active["action"]
-        start_time = active["time"]
-        elapsed = (now - start_time).total_seconds()
 
-        # Smoke max 5 minutes
-        if act == "Smoke" and elapsed > 5*60:
+        action = active["action"]
+        start_time = active["time"]
+        elapsed_minutes = (now - start_time).total_seconds() / 60
+
+        if action == "Smoke" and elapsed_minutes >= 5 and not u.get("warning_sent", False):
             await context.bot.send_message(
                 chat_id=u["chat_id"],
                 text=(
-                    "🚨 <b>Smoke Break Time Exceeded</b>\n\n"
-                    f"⌚ You have been on <b>Smoke</b> break for more than 5 minutes!\n"
-                    "⏳ Please return to seat immediately.\n"
-                    "💰 <b>Late return will result in $100 fine</b>"
+                    f"🚨 @{user}\n\n"
+                    f"🚬 <b>Smoke Time Limit Exceeded</b>\n\n"
+                    "⚠️ You have exceeded your smoke time limit.\n\n"
+                    "👉 Please back to seat immediately or you will get <b>10$ fine</b>."
                 ),
                 parse_mode=ParseMode.HTML
             )
-        # Toilet max 10 minutes
-        if act == "Toilet" and elapsed > 10*60:
+            u["warning_sent"] = True
+
+        elif action == "Toilet" and elapsed_minutes >= 14 and not u.get("warning_sent", False):
             await context.bot.send_message(
                 chat_id=u["chat_id"],
                 text=(
-                    "🚨 <b>Toilet Break Time Exceeded</b>\n\n"
-                    f"⌚ You have been on <b>Toilet</b> break for more than 10 minutes!\n"
-                    "⏳ Please return to seat immediately.\n"
-                    "💰 <b>Late return will result in $100 fine</b>"
+                    f"🚨 @{user}\n\n"
+                    f"🚻 <b>Toilet Time Limit Exceeded</b>\n\n"
+                    "⚠️ You have exceeded your toilet time limit.\n\n"
+                    "👉 Please back to seat immediately or you will get <b>10$ fine</b>."
                 ),
                 parse_mode=ParseMode.HTML
             )
+            u["warning_sent"] = True
+
 # ---------------- COMMANDS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.first_name
+    user = update.effective_user.username or update.effective_user.first_name
     if user not in user_data:
-        user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None}
+        user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None, "warning_sent": False, "chat_id": None}
 
     msg = (
         "✨ <b>Welcome to Work Tracker Bot</b>\n\n"
@@ -101,13 +108,14 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------------- BUTTON HANDLER ----------------
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user.first_name
+    user = update.effective_user.username or update.effective_user.first_name
     action = update.message.text
-    now = datetime.now()
+    now = datetime.now(BANGLADESH_TZ)
         
     if user not in user_data:
-        user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None}
+        user_data[user] = {"Start Work": [], "Smoke": [], "Toilet": [], "Eat": [], "Back to Seat": [], "Off Work": None, "Away": None, "warning_sent": False, "chat_id": None}
     u = user_data[user]
+    u["chat_id"] = update.effective_chat.id
 
     active_break = u["Away"]
 
@@ -123,7 +131,6 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
         return
-        
     # ---------- DAILY LIMIT CHECK ----------
     if action == "Smoke" and len(u["Smoke"]) >= 5:
         await update.message.reply_text(
@@ -194,6 +201,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         u["Back to Seat"].append({"action": away_action, "time": now, "duration": duration})
         u[away_action].append(duration)
         u["Away"] = None
+        u["warning_sent"] = False
 
         total_duration = sum(u[away_action], timedelta())
         total_count = len(u[away_action])
@@ -271,6 +279,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------- BREAKS ----------
     if action=="Eat":
         u["Away"] = {"action": action, "time": now}
+        u["warning_sent"] = False
         today_count = len(u[action])
         start_work_time = time_str(u["Start Work"][0])
 
@@ -290,6 +299,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action=="Toilet":
         u["Away"] = {"action": action, "time": now}
+        u["warning_sent"] = False
         today_count = len(u[action])
 
         msg = (
@@ -307,6 +317,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action=="Smoke":
         u["Away"] = {"action": action, "time": now}
+        u["warning_sent"] = False
         today_count = len(u[action])
 
         msg = (
@@ -343,6 +354,8 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("report", report))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button))
+
+app.job_queue.run_repeating(check_active_breaks, interval=30, first=30)
 
 print("Bot is running... ✅")
 app.run_polling()
